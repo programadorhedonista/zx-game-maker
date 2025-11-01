@@ -1,6 +1,7 @@
+
 import os
 from pathlib import Path
-import platform
+import shutil
 import subprocess
 import build
 import sys
@@ -18,8 +19,7 @@ class TextRedirector:
 
 from configuration.folders import BIN_FOLDER, OUTPUT_FOLDER, DIST_FOLDER, ASSETS_FOLDER, SCREENS_FOLDER, MAP_FOLDER, MAPS_FILE, HUD_MAP_FILE, MAPS_PROJECT, SRC_FOLDER
 from configuration.memoria import INITIAL_ADDRESS, MEMORY_BANK_SIZE
-# Detectar el sistema operativo 
-CURRENT_OS = platform.system()
+from configuration.system import CURRENT_OS
 
 import tkinter as tk
 from tkinter import messagebox
@@ -61,73 +61,56 @@ def executeBuild(verbose=False, selected_folder=None):
             sys.stderr = old_stderr
     threading.Thread(target=run).start()
 
-def run_script(script_name, output_text, extra_args=None):
+def run_pasmo(output_text, extra_args=None):
     def execute(script_name):
-        try:
-            # Limpiar la ventana de salida
-            output_text.delete(1.0, tk.END)
+        pasmo = {
+            "Windows": {"ejecutable": Path("pasmo.exe"), "path": Path("..")},
+            "Linux":   {"ejecutable": Path("pasmo"),     "path": Path("..")},
+            "Darwin":  {"ejecutable": Path("pasmo"),     "path": Path("..")}
+        }
+        ejecutable = pasmo[CURRENT_OS]["ejecutable"]
+        file_path = pasmo[CURRENT_OS]["path"] / ejecutable
 
-            # Detectar el sistema operativo y añadir la extensión adecuada
-            if CURRENT_OS == "Windows":
-                script_name += ".ps1"
-            elif CURRENT_OS in ["Linux", "Darwin"]:
-                script_name += ".sh"
+        # comprueba si existe el ejecutable de pasmo
+        if not (found_path := shutil.which(ejecutable)):
+            # no está en el PATH,  probar en el path del motor
+            if not file_path.exists():
+                print(f"El fichero {file_path} no existe.\nDescarga de https://pasmo.speccy.org/ y pon el fichero {ejecutable} en la carpeta del proyecto")
+                input("Pulse una tecla para cerrar...")
+                sys.exit(1)
             else:
-                output_text.insert(tk.END, f"El sistema operativo no es compatible.\n")
-                return
+                # no estaba en PATH pero existe en el path del motor
+                print("DEBUG pasmo no estaba en PATH pero existe en la carpeta del proyecto")
+        else:
+            # está en el PATH, usar esa ruta
+            file_path = Path(found_path)
+        print(f"DEBUG usando pasmo en {file_path}")
 
-            # Construir la ruta completa del script en la carpeta src/scripts
-            script_path = Path.cwd() / "scripts" / script_name
-
-            # Verificar si el script existe
-            if not script_path.exists():
-                output_text.insert(tk.END, f"No se encontró el script: {script_path}\n")
-                return
-
-            # Construir el comando con parámetros adicionales
-            command = [str(script_path)]
-            if extra_args:
-                command.extend(extra_args)
-
-            # Ejecutar el script según el sistema operativo
-            if CURRENT_OS == "Windows":
-                process = subprocess.Popen(
-                    ["powershell", "-ExecutionPolicy", "Bypass", "-File"] + command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1
-                )
-            elif CURRENT_OS in ["Linux", "Darwin"]:
-                process = subprocess.Popen(
-                    ["bash"] + command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1
-                )
-
-            # Leer la salida del proceso en tiempo real
-            for line in iter(process.stdout.readline, ''):
-                output_text.insert(tk.END, line)
+        # Limpiar la ventana de salida
+        output_text.delete(1.0, tk.END)
+        try:
+            with subprocess.Popen([
+                str(file_path.resolve()),
+                # "--name",
+                # "sound code",
+                "--tap",
+                str(Path("boriel", "player.asm").resolve()),
+                str(Path(ASSETS_FOLDER, "fx", "fx.tap").resolve())
+                ],
+                bufsize=1,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT
+            ) as proc:
+                # Leer la salida del proceso en tiempo real
+                output_text.insert(tk.END, proc.stdout.read())
                 output_text.see(tk.END)
-
-            for line in iter(process.stderr.readline, ''):
-                output_text.insert(tk.END, line)
-                output_text.see(tk.END)
-
-            process.wait()
-            # if process.returncode == 0:
-            #     output_text.insert(tk.END, f"\nEl script {script_name} se ejecutó correctamente.\n")
-            # else:
-            #     output_text.insert(tk.END, f"\nEl script {script_name} terminó con errores.\n")
-
-        except FileNotFoundError:
-            output_text.insert(tk.END, f"No se encontró el script {script_name}\n")
-        except Exception as e:
-            output_text.insert(tk.END, f"Error al ejecutar {script_name}:\n{e}\n")
-
-    threading.Thread(target=execute, args=(script_name,)).start()
+            proc.wait()
+        except subprocess.CalledProcessError as e:
+            print(f"Error al ejecutar {file_path}: {e}")
+            input("Pulse una tecla para cerrar...")
+            sys.exit(1)
+    threading.Thread(target=execute, args=(output_text,)).start()
 
 def open_game_variant(variant):
     """Abre el juego en su variante 'Normal' o 'RF'."""
@@ -538,7 +521,7 @@ menu_bar = tk.Menu(root)
 build_menu = tk.Menu(menu_bar, tearoff=0)
 build_menu.add_command(label="Game", command=lambda: executeBuild())
 build_menu.add_command(label="Game (verbose)", command=lambda: executeBuild(verbose=True))
-build_menu.add_command(label="FX", command=lambda: run_script("make-fx", output_text))
+build_menu.add_command(label="FX", command=lambda: run_pasmo(output_text))
 build_menu.add_separator()
 build_menu.add_command(label="Exit", command=root.quit)
 menu_bar.add_cascade(label="Build", menu=build_menu)
